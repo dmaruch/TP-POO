@@ -15,7 +15,9 @@ class Database:
                 nome TEXT NOT NULL,
                 email TEXT NOT NULL UNIQUE,
                 senha TEXT NOT NULL,
-                tipo TEXT NOT NULL CHECK(tipo IN ('Administrador', 'Demandante', 'Bolsista'))
+                tipo_usuario TEXT NOT NULL,
+                administrador_id INTEGER,
+                FOREIGN KEY (administrador_id) REFERENCES usuarios(id)
             )
             ''')
             self.conn.execute('''
@@ -49,16 +51,23 @@ class Database:
             )
             ''')
 
-    def adicionar_usuario(self, nome, email, senha, tipo):
+    def adicionar_usuario(self, nome, email, senha, tipo_usuario, administrador_id=None):
         with self.conn:
-            self.conn.execute(
-                "INSERT INTO usuarios (nome, email, senha, tipo) VALUES (?, ?, ?, ?)", (nome, email, senha, tipo)
-            )
+            if tipo_usuario == "Bolsista":
+                self.conn.execute(
+                    "INSERT INTO usuarios (nome, email, senha, tipo_usuario, administrador_id) VALUES (?, ?, ?, ?, ?)",
+                    (nome, email, senha, tipo_usuario, administrador_id)
+                )
+            else:
+                self.conn.execute(
+                    "INSERT INTO usuarios (nome, email, senha, tipo_usuario) VALUES (?, ?, ?, ?)",
+                    (nome, email, senha, tipo_usuario)
+                )
 
     def validar_usuario(self, email, senha):
         with self.conn:
             return self.conn.execute(
-                "SELECT id, nome, tipo FROM usuarios WHERE email = ? AND senha = ?",
+                "SELECT id, nome, tipo_usuario FROM usuarios WHERE email = ? AND senha = ?",
                 (email, senha)
             ).fetchone()
 
@@ -79,12 +88,16 @@ class Database:
             else:
                 return []
 
-    def listar_usuarios(self, administrador_id):
+    def listar_usuarios(self, administrador_id=None):
         with self.conn:
-            return self.conn.execute(
-                "SELECT id, nome, email, tipo FROM usuarios WHERE id IN (SELECT usuario_id FROM projeto_usuarios WHERE projeto_id IN (SELECT projeto_id FROM projeto_usuarios WHERE usuario_id = ?))",
-                (administrador_id,)
-            ).fetchall()
+            if administrador_id:
+                return self.conn.execute(
+                    "SELECT id, nome, email, tipo_usuario FROM usuarios WHERE tipo_usuario = 'Bolsista'"
+                ).fetchall()
+            else:
+                return self.conn.execute(
+                    "SELECT id, nome, email, tipo_usuario FROM usuarios"
+                ).fetchall()
 
     def remover_usuario(self, usuario_id):
         with self.conn:
@@ -110,7 +123,8 @@ class Database:
     def adicionar_participante_projeto(self, projeto_id, usuario_id):
         with self.conn:
             self.conn.execute(
-                "INSERT INTO projeto_usuarios (projeto_id, usuario_id) VALUES (?, ?)", (projeto_id, usuario_id)
+                "INSERT INTO projeto_usuarios (projeto_id, usuario_id) VALUES (?, ?)",
+                (projeto_id, usuario_id)
             )
 
     def remover_participante_projeto(self, projeto_id, usuario_id):
@@ -132,6 +146,20 @@ class Database:
                 "UPDATE demandas SET status = ?, bolsista_id = ? WHERE id = ?",
                 (status, bolsista_id, demanda_id)
             )
+
+    def listar_projetos_bolsista(self, bolsista_id):
+        with self.conn:
+            return self.conn.execute(
+                "SELECT p.id, p.nome, p.area FROM projetos p JOIN projeto_usuarios pu ON p.id = pu.projeto_id WHERE pu.usuario_id = ?",
+                (bolsista_id,)
+            ).fetchall()
+
+    def listar_bolsistas_projeto(self, projeto_id):
+        with self.conn:
+            return self.conn.execute(
+                "SELECT u.id, u.nome, u.email FROM usuarios u JOIN projeto_usuarios pu ON u.id = pu.usuario_id WHERE pu.projeto_id = ?",
+                (projeto_id,)
+            ).fetchall()
 
 # Interface Flet
 def main(page: ft.Page):
@@ -190,6 +218,12 @@ def main(page: ft.Page):
 
         def cadastrar_usuario(e):
             if nome_field.value and email_field.value and senha_field.value and tipo_selector.value:
+                if tipo_selector.value == "Bolsista":
+                    page.snack_bar = ft.SnackBar(ft.Text("Erro: Não é possível cadastrar bolsistas por esta tela!"))
+                    page.snack_bar.open = True
+                    page.update()
+                    return
+
                 try:
                     db.adicionar_usuario(
                         nome_field.value,
@@ -217,8 +251,7 @@ def main(page: ft.Page):
             label="Tipo de Usuário",
             options=[
                 ft.dropdown.Option("Administrador"),
-                ft.dropdown.Option("Demandante"),
-                ft.dropdown.Option("Bolsista")
+                ft.dropdown.Option("Demandante")
             ]
         )
         cadastrar_button = ft.ElevatedButton("Cadastrar", on_click=cadastrar_usuario)
@@ -245,72 +278,110 @@ def main(page: ft.Page):
         def gerenciar_projetos_page(e):
             limpar_tela()
 
-            def adicionar_projeto(e):
-                if nome_projeto_field.value and area_projeto_field.value:
-                    projeto_id = db.adicionar_projeto(nome_projeto_field.value, area_projeto_field.value)
-                    page.snack_bar = ft.SnackBar(ft.Text(f"Projeto '{nome_projeto_field.value}' adicionado com sucesso!"))
-                    page.snack_bar.open = True
-                    nome_projeto_field.value = ""
-                    area_projeto_field.value = ""
-                    listar_projetos()
-                    page.update()
+            def selecionar_projeto(e):
+                projeto_id = projeto_selector.value
+                if projeto_id:
+                    editar_projeto_page(projeto_id)
 
-            def listar_projetos():
-                projetos = db.listar_projetos()
-                projetos_list.controls.clear()
-                for projeto in projetos:
-                    projetos_list.controls.append(
-                        ft.Text(f"{projeto[1]} - {projeto[2]}")
-                    )
-                page.update()
+            def novo_projeto_page(e):
+                limpar_tela()
 
+                def adicionar_projeto(e):
+                    if nome_projeto_field.value and area_projeto_field.value:
+                        projeto_id = db.adicionar_projeto(nome_projeto_field.value, area_projeto_field.value)
+                        page.snack_bar = ft.SnackBar(ft.Text(f"Projeto '{nome_projeto_field.value}' adicionado com sucesso!"))
+                        page.snack_bar.open = True
+                        nome_projeto_field.value = ""
+                        area_projeto_field.value = ""
+                        listar_projetos()
+                        page.update()
+
+                nome_projeto_field = ft.TextField(label="Nome do Projeto")
+                area_projeto_field = ft.TextField(label="Área do Projeto")
+                adicionar_projeto_button = ft.ElevatedButton("Adicionar Projeto", on_click=adicionar_projeto)
+                voltar_button = ft.ElevatedButton("Voltar", on_click=gerenciar_projetos_page)
+
+                page.add(
+                    ft.Column([
+                        ft.Text("Novo Projeto", size=24, weight="bold"),
+                        nome_projeto_field,
+                        area_projeto_field,
+                        adicionar_projeto_button,
+                        voltar_button
+                    ])
+                )
+
+            projetos = db.listar_projetos()
+            projeto_selector = ft.Dropdown(
+                label="Selecione o Projeto",
+                options=[ft.dropdown.Option(projeto[0], text=projeto[1]) for projeto in projetos]
+            )
+            selecionar_button = ft.ElevatedButton("Selecionar Projeto", on_click=selecionar_projeto)
+            novo_projeto_button = ft.ElevatedButton("Novo Projeto", on_click=novo_projeto_page)
             voltar_button = ft.ElevatedButton("Voltar", on_click=administrador_menu)
-
-            nome_projeto_field = ft.TextField(label="Nome do Projeto")
-            area_projeto_field = ft.TextField(label="Área do Projeto")
-            adicionar_projeto_button = ft.ElevatedButton("Adicionar Projeto", on_click=adicionar_projeto)
 
             projetos_list = ft.Column()
 
             page.add(
                 ft.Column([
                     ft.Text("Gerenciar Projetos", size=24, weight="bold"),
-                    nome_projeto_field,
-                    area_projeto_field,
-                    adicionar_projeto_button,
-                    ft.Text("Projetos Cadastrados:"),
-                    projetos_list,
-                    voltar_button
+                    projeto_selector,
+                    selecionar_button,
+                    novo_projeto_button,
+                    voltar_button,
+                    projetos_list
                 ])
             )
 
             listar_projetos()
 
-        def gerenciar_demandas_page(e):
+        def listar_projetos():
+            projetos = db.listar_projetos()
+            projetos_list.controls.clear()
+            for projeto in projetos:
+                projetos_list.controls.append(
+                    ft.Text(f"{projeto[1]} - {projeto[2]}")
+                )
+            page.update()
+
+        def editar_projeto_page(projeto_id):
             limpar_tela()
+
+            def listar_bolsistas():
+                bolsistas = db.listar_bolsistas_projeto(projeto_id)
+                bolsistas_list.controls.clear()
+                for bolsista in bolsistas:
+                    bolsistas_list.controls.append(
+                        ft.Text(f"{bolsista[1]} - {bolsista[2]}")
+                    )
+                page.update()
 
             def listar_demandas():
                 demandas = db.listar_demandas(tipo_usuario="Administrador")
                 demandas_list.controls.clear()
                 for demanda in demandas:
                     demandas_list.controls.append(
-                        ft.Text(f"{demanda[1]} - {demanda[4]} - {demanda[5]}")
+                        ft.Text(f"{demanda[1]} - {demanda[5]} - Status: {demanda[4]}")
                     )
                 page.update()
 
-            voltar_button = ft.ElevatedButton("Voltar", on_click=administrador_menu)
+            voltar_button = ft.ElevatedButton("Voltar", on_click=gerenciar_projetos_page)
 
+            bolsistas_list = ft.Column()
             demandas_list = ft.Column()
 
             page.add(
                 ft.Column([
-                    ft.Text("Gerenciar Demandas", size=24, weight="bold"),
-                    ft.Text("Demandas Cadastradas:"),
+                    ft.Text("Editar Projeto", size=24, weight="bold"),
+                    ft.Text("Bolsistas Associados:"),
+                    bolsistas_list,
+                    ft.Text("Demandas Associadas:"),
                     demandas_list,
                     voltar_button
                 ])
             )
 
+            listar_bolsistas()
             listar_demandas()
 
         def criar_bolsista_page(e):
@@ -323,7 +394,8 @@ def main(page: ft.Page):
                             nome_field.value,
                             email_field.value,
                             senha_field.value,
-                            "Bolsista"
+                            "Bolsista",
+                            page.session.get("user_id")  # Passa o ID do administrador
                         )
                         page.snack_bar = ft.SnackBar(ft.Text(f"Bolsista '{nome_field.value}' cadastrado com sucesso!"))
                         page.snack_bar.open = True
@@ -359,8 +431,8 @@ def main(page: ft.Page):
 
         opcoes = ft.Column([
             ft.ElevatedButton("Gerenciar Projetos", on_click=gerenciar_projetos_page),
+            ft.ElevatedButton("Gerenciar Bolsistas", on_click=gerenciar_bolsistas_page),
             ft.ElevatedButton("Gerenciar Demandas", on_click=gerenciar_demandas_page),
-            ft.ElevatedButton("Criar Perfil de Bolsista", on_click=criar_bolsista_page),
             ft.ElevatedButton("Sair", on_click=voltar_ao_login)
         ])
 
@@ -474,6 +546,4 @@ def main(page: ft.Page):
 
     login_page()
 
-
 ft.app(target=main)
-
