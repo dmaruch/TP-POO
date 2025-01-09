@@ -79,11 +79,10 @@ class Database:
             else:
                 return []
 
-    def listar_usuarios(self, administrador_id):
+    def listar_usuarios(self, tipo):
         with self.conn:
             return self.conn.execute(
-                "SELECT id, nome, email, tipo FROM usuarios WHERE id IN (SELECT usuario_id FROM projeto_usuarios WHERE projeto_id IN (SELECT projeto_id FROM projeto_usuarios WHERE usuario_id = ?))",
-                (administrador_id,)
+                "SELECT id, nome, email FROM usuarios WHERE tipo = ?", (tipo,)
             ).fetchall()
 
     def remover_usuario(self, usuario_id):
@@ -110,7 +109,7 @@ class Database:
     def adicionar_participante_projeto(self, projeto_id, usuario_id):
         with self.conn:
             self.conn.execute(
-                "INSERT INTO projeto_usuarios (projeto_id, usuario_id) VALUES (?, ?)", (projeto_id, usuario_id)
+                "INSERT INTO projeto_usuarios (projeto_id, usuario_id) VALUES (?, ?, ?)", (projeto_id, usuario_id)
             )
 
     def remover_participante_projeto(self, projeto_id, usuario_id):
@@ -132,6 +131,20 @@ class Database:
                 "UPDATE demandas SET status = ?, bolsista_id = ? WHERE id = ?",
                 (status, bolsista_id, demanda_id)
             )
+
+    def atribuir_demanda(self, bolsista_id, demanda_id):
+        with self.conn:
+            self.conn.execute(
+                "UPDATE demandas SET bolsista_id = ? WHERE id = ?", (bolsista_id, demanda_id)
+            )
+
+    def obter_demanda(self, demanda_id):
+        with self.conn:
+            return self.conn.execute("SELECT * FROM demandas WHERE id = ?", (demanda_id,)).fetchone()
+
+    def atualizar_estado_demanda(self, demanda_id, novo_estado):
+        with self.conn:
+            self.conn.execute("UPDATE demandas SET estado = ? WHERE id = ?", (novo_estado, demanda_id))
 
 # Interface Flet
 def main(page: ft.Page):
@@ -292,67 +305,107 @@ def main(page: ft.Page):
             def listar_demandas():
                 demandas = db.listar_demandas(tipo_usuario="Administrador")
                 demandas_list.controls.clear()
+                demanda_selector.options.clear()
                 for demanda in demandas:
                     demandas_list.controls.append(
-                        ft.Text(f"{demanda[1]} - {demanda[4]} - {demanda[5]}")
+                        ft.Row([
+                            ft.Text(f"{demanda[1]} - {demanda[5]} - Status: {demanda[4]}"),
+                            ft.ElevatedButton("Selecionar", on_click=lambda e, demanda_id=demanda[0]: selecionar_demanda(demanda_id))
+                        ])
                     )
+                    demanda_selector.options.append(ft.dropdown.Option(demanda[0], text=f"{demanda[1]} - {demanda[5]}"))
                 page.update()
 
+            def selecionar_demanda(demanda_id):
+                page.session.set("selected_demanda_id", demanda_id)
+                demanda = db.obter_demanda(demanda_id)
+                demanda_selector.value = demanda_id
+                status_selector.value = demanda[4]
+                page.update()
+
+            def atualizar_status(e):
+                demanda_id = page.session.get("selected_demanda_id")
+                novo_status = status_selector.value
+                if demanda_id and novo_status:
+                    db.atualizar_status_demanda(demanda_id, novo_status)
+                    page.snack_bar = ft.SnackBar(ft.Text("Status da demanda atualizado com sucesso!"))
+                    page.snack_bar.open = True
+                    listar_demandas()
+                    page.update()
+
             voltar_button = ft.ElevatedButton("Voltar", on_click=administrador_menu)
+
+            demanda_selector = ft.Dropdown(
+                label="Selecione a Demanda",
+                options=[]
+            )
+            status_selector = ft.Dropdown(
+                label="Novo Status",
+                options=[
+                    ft.dropdown.Option("Recusada"),
+                    ft.dropdown.Option("Pendente"),
+                    ft.dropdown.Option("Em Andamento"),
+                    ft.dropdown.Option("Concluída"),
+                    ft.dropdown.Option("Entregue")
+                ]
+            )
+            atualizar_button = ft.ElevatedButton("Atualizar Status", on_click=atualizar_status)
 
             demandas_list = ft.Column()
 
             page.add(
                 ft.Column([
                     ft.Text("Gerenciar Demandas", size=24, weight="bold"),
-                    ft.Text("Demandas Cadastradas:"),
                     demandas_list,
+                    demanda_selector,
+                    status_selector,
+                    atualizar_button,
                     voltar_button
                 ])
             )
 
             listar_demandas()
 
-        def criar_bolsista_page(e):
+        def gerenciar_bolsistas_page(e):
             limpar_tela()
 
-            def adicionar_bolsista(e):
-                if nome_field.value and email_field.value and senha_field.value:
-                    try:
-                        db.adicionar_usuario(
-                            nome_field.value,
-                            email_field.value,
-                            senha_field.value,
-                            "Bolsista"
-                        )
-                        page.snack_bar = ft.SnackBar(ft.Text(f"Bolsista '{nome_field.value}' cadastrado com sucesso!"))
-                        page.snack_bar.open = True
-                        nome_field.value = ""
-                        email_field.value = ""
-                        senha_field.value = ""
-                        page.update()
-                    except sqlite3.IntegrityError:
-                        page.snack_bar = ft.SnackBar(ft.Text("Erro: Email já cadastrado!"))
-                        page.snack_bar.open = True
-                        page.update()
+            def listar_bolsistas():
+                bolsistas = db.listar_usuarios(tipo="Bolsista")
+                bolsistas_list.controls.clear()
+                for bolsista in bolsistas:
+                    bolsistas_list.controls.append(
+                        ft.Text(f"{bolsista[1]} - {bolsista[2]}")
+                    )
+                page.update()
+
+            def atribuir_demanda(e):
+                if bolsista_selector.value and demanda_selector.value:
+                    db.atribuir_demanda(bolsista_selector.value, demanda_selector.value)
+                    page.snack_bar = ft.SnackBar(ft.Text("Demanda atribuída com sucesso!"))
+                    page.snack_bar.open = True
+                    page.update()
 
             voltar_button = ft.ElevatedButton("Voltar", on_click=administrador_menu)
 
-            nome_field = ft.TextField(label="Nome")
-            email_field = ft.TextField(label="Email")
-            senha_field = ft.TextField(label="Senha", password=True)
-            adicionar_button = ft.ElevatedButton("Cadastrar Bolsista", on_click=adicionar_bolsista)
+            bolsista_selector = ft.Dropdown(label="Selecione o Bolsista")
+            demanda_selector = ft.Dropdown(label="Selecione a Demanda")
+            atribuir_button = ft.ElevatedButton("Atribuir Demanda", on_click=atribuir_demanda)
+
+            bolsistas_list = ft.Column()
 
             page.add(
                 ft.Column([
-                    ft.Text("Cadastrar Bolsista", size=24, weight="bold"),
-                    nome_field,
-                    email_field,
-                    senha_field,
-                    adicionar_button,
+                    ft.Text("Gerenciar Bolsistas", size=24, weight="bold"),
+                    bolsista_selector,
+                    demanda_selector,
+                    atribuir_button,
+                    ft.Text("Bolsistas Cadastrados:"),
+                    bolsistas_list,
                     voltar_button
                 ])
             )
+
+            listar_bolsistas()
 
         titulo = ft.Text(f"Bem-vindo(a), Administrador(a): {page.session.get('user_name')}", size=24, weight="bold")
         subtitulo = ft.Text("Selecione uma funcionalidade:", size=16)
@@ -360,7 +413,7 @@ def main(page: ft.Page):
         opcoes = ft.Column([
             ft.ElevatedButton("Gerenciar Projetos", on_click=gerenciar_projetos_page),
             ft.ElevatedButton("Gerenciar Demandas", on_click=gerenciar_demandas_page),
-            ft.ElevatedButton("Criar Perfil de Bolsista", on_click=criar_bolsista_page),
+            ft.ElevatedButton("Gerenciar Bolsistas", on_click=gerenciar_bolsistas_page),
             ft.ElevatedButton("Sair", on_click=voltar_ao_login)
         ])
 
@@ -476,4 +529,3 @@ def main(page: ft.Page):
 
 
 ft.app(target=main)
-
