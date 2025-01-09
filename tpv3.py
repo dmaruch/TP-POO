@@ -13,23 +13,9 @@ class Database:
             CREATE TABLE IF NOT EXISTS usuarios (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 nome TEXT NOT NULL,
-                email TEXT NOT NULL UNIQUE,
+                email TEXT NOT NULL,
                 senha TEXT NOT NULL,
-                tipo TEXT NOT NULL CHECK(tipo IN ('Administrador', 'Demandante', 'Bolsista'))
-            )
-            ''')
-            self.conn.execute('''
-            CREATE TABLE IF NOT EXISTS demandas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                titulo TEXT NOT NULL,
-                descricao TEXT,
-                solicitante_id INTEGER,
-                projeto_id INTEGER,
-                status TEXT DEFAULT 'Pendente',
-                bolsista_id INTEGER,
-                FOREIGN KEY (solicitante_id) REFERENCES usuarios (id),
-                FOREIGN KEY (projeto_id) REFERENCES projetos (id),
-                FOREIGN KEY (bolsista_id) REFERENCES usuarios (id)
+                tipo TEXT NOT NULL
             )
             ''')
             self.conn.execute('''
@@ -40,12 +26,15 @@ class Database:
             )
             ''')
             self.conn.execute('''
-            CREATE TABLE IF NOT EXISTS projeto_usuarios (
-                projeto_id INTEGER,
-                usuario_id INTEGER,
-                PRIMARY KEY (projeto_id, usuario_id),
-                FOREIGN KEY (projeto_id) REFERENCES projetos (id),
-                FOREIGN KEY (usuario_id) REFERENCES usuarios (id)
+            CREATE TABLE IF NOT EXISTS demandas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                titulo TEXT NOT NULL,
+                descricao TEXT NOT NULL,
+                status TEXT NOT NULL,
+                solicitante_id INTEGER,
+                bolsista_id INTEGER,
+                FOREIGN KEY (solicitante_id) REFERENCES usuarios (id),
+                FOREIGN KEY (bolsista_id) REFERENCES usuarios (id)
             )
             ''')
 
@@ -72,12 +61,8 @@ class Database:
                 return self.conn.execute(
                     "SELECT * FROM demandas WHERE bolsista_id = ?", (usuario_id,)
                 ).fetchall()
-            elif tipo_usuario == "Administrador":
-                return self.conn.execute(
-                    "SELECT * FROM demandas"
-                ).fetchall()
             else:
-                return []
+                return self.conn.execute("SELECT * FROM demandas").fetchall()
 
     def listar_usuarios(self, tipo):
         with self.conn:
@@ -91,52 +76,25 @@ class Database:
 
     def listar_projetos(self, usuario_id=None, tipo_usuario=None):
         with self.conn:
-            if tipo_usuario == "Administrador":
-                return self.conn.execute(
-                    "SELECT id, nome, area FROM projetos WHERE id IN (SELECT projeto_id FROM projeto_usuarios WHERE usuario_id = ?)",
-                    (usuario_id,)
-                ).fetchall()
-            else:
-                return self.conn.execute("SELECT id, nome, area FROM projetos").fetchall()
+            return self.conn.execute("SELECT id, nome, area FROM projetos").fetchall()
 
     def adicionar_projeto(self, nome, area):
         with self.conn:
             self.conn.execute(
                 "INSERT INTO projetos (nome, area) VALUES (?, ?)", (nome, area)
             )
-            return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-    def adicionar_participante_projeto(self, projeto_id, usuario_id):
+    def obter_demanda(self, demanda_id):
         with self.conn:
-            self.conn.execute(
-                "INSERT INTO projeto_usuarios (projeto_id, usuario_id) VALUES (?, ?, ?)", (projeto_id, usuario_id)
-            )
+            return self.conn.execute("SELECT * FROM demandas WHERE id = ?", (demanda_id,)).fetchone()
 
-    def remover_participante_projeto(self, projeto_id, usuario_id):
+    def atualizar_status_demanda(self, demanda_id, novo_status):
         with self.conn:
-            self.conn.execute(
-                "DELETE FROM projeto_usuarios WHERE projeto_id = ? AND usuario_id = ?", (projeto_id, usuario_id)
-            )
-
-    def cadastrar_demanda(self, titulo, descricao, solicitante_id, projeto_id):
-        with self.conn:
-            self.conn.execute(
-                "INSERT INTO demandas (titulo, descricao, solicitante_id, projeto_id) VALUES (?, ?, ?, ?)",
-                (titulo, descricao, solicitante_id, projeto_id)
-            )
-
-    def atualizar_status_demanda(self, demanda_id, status, bolsista_id=None):
-        with self.conn:
-            self.conn.execute(
-                "UPDATE demandas SET status = ?, bolsista_id = ? WHERE id = ?",
-                (status, bolsista_id, demanda_id)
-            )
+            self.conn.execute("UPDATE demandas SET status = ? WHERE id = ?", (novo_status, demanda_id))
 
     def atribuir_demanda(self, bolsista_id, demanda_id):
         with self.conn:
-            self.conn.execute(
-                "UPDATE demandas SET bolsista_id = ? WHERE id = ?", (bolsista_id, demanda_id)
-            )
+            self.conn.execute("UPDATE demandas SET bolsista_id = ? WHERE id = ?", (bolsista_id, demanda_id))
 
     def obter_demanda(self, demanda_id):
         with self.conn:
@@ -372,10 +330,19 @@ def main(page: ft.Page):
             def listar_bolsistas():
                 bolsistas = db.listar_usuarios(tipo="Bolsista")
                 bolsistas_list.controls.clear()
+                bolsista_selector.options.clear()
                 for bolsista in bolsistas:
                     bolsistas_list.controls.append(
                         ft.Text(f"{bolsista[1]} - {bolsista[2]}")
                     )
+                    bolsista_selector.options.append(ft.dropdown.Option(bolsista[0], text=bolsista[1]))
+                page.update()
+
+            def listar_demandas():
+                demandas = db.listar_demandas()
+                demanda_selector.options.clear()
+                for demanda in demandas:
+                    demanda_selector.options.append(ft.dropdown.Option(demanda[0], text=f"{demanda[1]} - {demanda[5]}"))
                 page.update()
 
             def atribuir_demanda(e):
@@ -387,8 +354,8 @@ def main(page: ft.Page):
 
             voltar_button = ft.ElevatedButton("Voltar", on_click=administrador_menu)
 
-            bolsista_selector = ft.Dropdown(label="Selecione o Bolsista")
-            demanda_selector = ft.Dropdown(label="Selecione a Demanda")
+            bolsista_selector = ft.Dropdown(label="Selecione o Bolsista", options=[])
+            demanda_selector = ft.Dropdown(label="Selecione a Demanda", options=[])
             atribuir_button = ft.ElevatedButton("Atribuir Demanda", on_click=atribuir_demanda)
 
             bolsistas_list = ft.Column()
@@ -406,6 +373,7 @@ def main(page: ft.Page):
             )
 
             listar_bolsistas()
+            listar_demandas()
 
         titulo = ft.Text(f"Bem-vindo(a), Administrador(a): {page.session.get('user_name')}", size=24, weight="bold")
         subtitulo = ft.Text("Selecione uma funcionalidade:", size=16)
